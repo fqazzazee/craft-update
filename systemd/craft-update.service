@@ -5,8 +5,9 @@ After=network-online.target
 [Service]
 Type=oneshot
 Environment=CRAFT_UPDATE_NOTIFY=1
-Environment=PATH=%h/.cargo/bin:%h/.local/bin:/usr/local/bin:/usr/bin
-ExecStart=%h/.local/bin/craft-update
+# A login shell gives the same PATH (and so the same cargo) as manual runs. A different
+# toolchain would make cargo rebuild every app from scratch on each switch.
+ExecStart=/bin/bash -lc 'exec "$HOME/.local/bin/craft-update"'
 Nice=15
 IOSchedulingClass=idle
 CPUWeight=20
