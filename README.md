@@ -79,18 +79,37 @@ craft-update                    # update every app; rebuild only the ones that c
 craft-update photocraft         # update just these apps
 craft-update --force            # rebuild even if nothing changed
 craft-update --list             # show each app's built commit and how many new commits are waiting
-craft-update --watch            # follow a running update live, or show what the last run did
+craft-update --watch            # dashboard: last update and new versions per app, live progress
 ```
 
 ### Watching an update
 
-A run prints its progress as it goes: which app it's on (`==> [3/7] photocraft`), cargo's
-progress bar, and how long each build took. Everything is also written to
-`~/.local/state/craft-update/last-run.log`.
+`craft-update --watch` shows a dashboard of your apps:
 
-From another terminal, `craft-update --watch` follows the running update live and exits when it
-finishes. Ctrl-C stops watching, not the update. With no update running, it shows a summary of the
-last run.
+```
+Craft apps  Fri Oct 9 13:11:00
+Update running since Oct 9 13:10 (just now). Ctrl-C stops watching, not the update.
+
+APP          INSTALLED  LAST UPDATED             NEW VERSION                  THIS RUN
+pdfcraft     f626db25c  Oct 9 13:00 (10m ago)    4 new commits                building 0m 51s
+photocraft   8e8e9f2c6  Oct 9 07:41 (5h ago)     update available             queued
+deckcraft    4b09f35c1  Oct 9 11:14 (1h ago)     up to date
+...
+
+pdfcraft [#############################################.] 662/664 99%
+compiling: pdfcraft-ui-egui
+```
+
+- **LAST UPDATED** is when each app was last built and installed.
+- **NEW VERSION** checks GitHub for newer commits each time you open the dashboard. It shows the
+  number of new commits when your copy of the repo already has them, and "update available" when
+  it doesn't yet.
+- While an update is running, the dashboard stays on screen and redraws every second, with a
+  progress bar for the app being built. It works from any terminal, and exits when the update
+  finishes. Ctrl-C stops watching, not the update.
+- With no update running, it prints the table once, including how the last run went.
+
+The run's full output, including cargo's own messages, is in `~/.local/state/craft-update/last-run.log`.
 
 Only one update runs at a time. Starting a second one tells you to use `--watch` instead.
 

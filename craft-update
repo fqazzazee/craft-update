@@ -7,7 +7,8 @@
 #   craft-update photocraft   only these apps
 #   craft-update --force      rebuild even when nothing changed
 #   craft-update --list       show apps, installed commit and upstream status
-#   craft-update --watch      follow a running update live (from any terminal), or show the last run
+#   craft-update --watch      dashboard: last update and new versions per app; live progress
+#                             while an update runs (from any terminal)
 #
 # Apps live in ~/git/<app>. The app list is ~/.config/craft-update/apps (one name per line,
 # optional cargo flags after the name). Add a line and run craft-update to install a new app;
@@ -46,16 +47,133 @@ fi
 LOG=$STATE/last-run.log
 PIDFILE=$STATE/run.pid
 
-watch() {
-  if [[ ! -f $LOG ]]; then echo "craft-update hasn't run yet."; exit 0; fi
-  local pid; pid=$(cat "$PIDFILE" 2>/dev/null)
-  if [[ -n $pid ]] && kill -0 "$pid" 2>/dev/null; then
-    echo "Following the running update (pid $pid). Ctrl-C stops watching, not the update."
-    tail -n 30 -f --pid="$pid" "$LOG"
+RUN=$STATE/run  # per-app state of the current/last run, read by --watch
+
+# "Oct 9 12:58 (2h ago)" for an epoch time.
+when() {
+  local t=$1 d=$(($(date +%s) - $1)) ago
+  if ((d < 60)); then ago="just now"
+  elif ((d < 3600)); then ago="$((d / 60))m ago"
+  elif ((d < 86400)); then ago="$((d / 3600))h ago"
+  else ago="$((d / 86400))d ago"; fi
+  echo "$(date -d "@$t" '+%b %-d %H:%M') ($ago)"
+}
+
+dur() { printf '%dm %02ds' $(($1 / 60)) $(($1 % 60)); }
+
+# Ask GitHub for each app's latest commit, in the background. Read-only, so it is safe while
+# an update is pulling the same repos.
+check_upstream() {
+  local app dir branch
+  for app in "${apps[@]}"; do
+    dir=$SRC_DIR/$app
+    [[ -d $dir/.git ]] || continue
+    branch=$(git -C "$dir" rev-parse --abbrev-ref '@{u}' 2>/dev/null) || continue
+    (timeout 20 git -C "$dir" ls-remote -q origin "refs/heads/${branch#*/}" 2>/dev/null |
+       cut -f1 >"$tmp/$app.remote.new" && mv "$tmp/$app.remote.new" "$tmp/$app.remote") &
+  done
+}
+
+upstream() {
+  local app=$1 built=$2 remote n
+  remote=$(cat "$tmp/$app.remote" 2>/dev/null)
+  if [[ -z $remote ]]; then echo "${C_DIM}checking...${C_OFF}"
+  elif [[ $remote == "$built" ]]; then echo "${C_OK}up to date${C_OFF}"
+  elif [[ $built != none ]] && n=$(git -C "$SRC_DIR/$app" rev-list --count "$built..$remote" 2>/dev/null); then
+    echo "${C_NEW}$n new commit$( ((n == 1)) || echo s)${C_OFF}"
+  else echo "${C_NEW}update available${C_OFF}"; fi
+}
+
+# cargo's last progress line from the run log: "<done> <total> <crates being compiled>".
+cargo_progress() {
+  local line
+  line=$(tail -c 4000 "$LOG" 2>/dev/null | tr '\r' '\n' | sed 's/\x1b\[[0-9;]*[A-Za-z]//g' |
+         grep -E 'Building \[.*\] [0-9]+/[0-9]+' | tail -1)
+  [[ $line =~ \]\ ([0-9]+)/([0-9]+)(:\ (.*))? ]] || return 1
+  echo "${BASH_REMATCH[1]} ${BASH_REMATCH[2]} ${BASH_REMATCH[4]}"
+}
+
+bar() {
+  local done=$1 total=$2 width=$3 fill
+  fill=$((total ? done * width / total : 0))
+  printf '%s%s' "$(printf '%*s' "$fill" '' | tr ' ' '#')" "$(printf '%*s' $((width - fill)) '' | tr ' ' '.')"
+}
+
+frame() {
+  local app built ts updated state info now active=$1 out cols
+  now=$(date +%s); cols=$(tput cols 2>/dev/null || echo 100)
+  out="${C_B}Craft apps${C_OFF}  $(date '+%a %b %-d %H:%M:%S')"$'\n'
+  if ((active)); then
+    out+="Update running since $(when "$(cat "$RUN/.started")"). Ctrl-C stops watching, not the update."$'\n'
+  elif [[ -f $RUN/.finished ]]; then
+    out+="No update running. Last run finished $(when "$(cat "$RUN/.finished")")."$'\n'
   else
-    echo "No update running. Last run, $(date -r "$LOG" '+%a %b %-d %H:%M'):"
-    grep -a -E '^(==>|    |updated:|FAILED:)' "$LOG"
+    out+="No update running."$'\n'
   fi
+  out+=$'\n'"$(printf "${C_B}%-12s %-10s %-24s %-28s %s${C_OFF}" APP INSTALLED "LAST UPDATED" "NEW VERSION" "$( ((active)) && echo "THIS RUN" || echo "LAST RUN")")"$'\n'
+  local current=""
+  for app in "${apps[@]}"; do
+    built=$(cat "$STATE/$app.built" 2>/dev/null || echo none)
+    if [[ -f $STATE/$app.built ]]; then updated=$(when "$(date -r "$STATE/$app.built" +%s)"); else updated="never"; fi
+    read -r state ts info < <(cat "$RUN/$app" 2>/dev/null)
+    case ${state:-} in
+      queued)   state="${C_DIM}queued${C_OFF}" ;;
+      pulling)  state="${C_RUN}pulling${C_OFF}"; current=$app ;;
+      building) state="${C_RUN}building $(dur $((now - ts)))${C_OFF}"; current=$app ;;
+      built)    state="${C_OK}built in $(dur "$info")${C_OFF}" ;;
+      uptodate) state="${C_DIM}no changes${C_OFF}" ;;
+      failed)   state="${C_ERR}FAILED ($info)${C_OFF}" ;;
+      *)        state="" ;;
+    esac
+    # Pad by visible width: the colour codes would throw printf's widths off.
+    local up; up=$(upstream "$app" "$built")
+    out+="$(printf '%-12s %-10s %-24s ' "$app" "${built:0:9}" "$updated")$up$(printf '%*s' $((29 - $(visible "$up"))) '')$state"$'\n'
+  done
+  if ((active)) && [[ -n $current ]]; then
+    local p d t crates w=$((cols > 70 ? cols - 34 : 36))
+    out+=$'\n'
+    if [[ $(cut -d' ' -f1 "$RUN/$current") == building ]] && p=$(cargo_progress); then
+      read -r d t crates <<<"$p"
+      out+="${C_B}$current${C_OFF} [$(bar "$d" "$t" "$w")] $d/$t $((d * 100 / t))%"$'\n'
+      out+="${C_DIM}compiling: ${crates:0:$((cols - 12))}${C_OFF}"$'\n'
+    else
+      out+="${C_B}$current${C_OFF} getting ready..."$'\n'
+    fi
+  fi
+  if [[ ${2:-} == redraw ]]; then
+    printf '\e[H%s\e[J' "${out//$'\n'/$'\e[K\n'}"
+  else
+    printf '%s' "$out"
+  fi
+}
+
+visible() { local x; x=$(printf '%s' "$1" | sed 's/\x1b\[[0-9;]*m//g'); echo "${#x}"; }
+
+watch() {
+  apps=()
+  local a _
+  while read -r a _; do [[ -z $a || $a == \#* ]] || apps+=("$a"); done <"$CONF"
+  if [[ -t 1 ]]; then
+    C_B=$'\e[1m' C_DIM=$'\e[2m' C_OK=$'\e[32m' C_NEW=$'\e[33m' C_RUN=$'\e[36m' C_ERR=$'\e[31m' C_OFF=$'\e[0m'
+  else
+    C_B="" C_DIM="" C_OK="" C_NEW="" C_RUN="" C_ERR="" C_OFF=""
+  fi
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; [[ -t 1 ]] && printf "\e[?25h"' EXIT
+  trap 'exit 0' INT TERM
+  check_upstream
+  local pid checked=$SECONDS
+  pid=$(cat "$PIDFILE" 2>/dev/null)
+  if [[ -n $pid ]] && kill -0 "$pid" 2>/dev/null; then
+    printf '\e[?25l\e[H\e[2J'
+    while kill -0 "$pid" 2>/dev/null; do
+      frame 1 redraw
+      if ((SECONDS - checked > 300)); then check_upstream; checked=$SECONDS; fi
+      sleep 1
+    done
+  fi
+  wait  # let the upstream checks finish, so the final table is complete
+  if [[ -n $pid ]] && [[ -t 1 ]]; then frame 0 redraw; else frame 0; fi
 }
 
 force=0 list=0 only=()
@@ -64,7 +182,7 @@ for arg in "$@"; do
     -f|--force) force=1 ;;
     -l|--list) list=1 ;;
     -w|--watch) watch; exit 0 ;;
-    -h|--help) sed -n '3,16p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '3,17p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*) echo "unknown option: $arg" >&2; exit 2 ;;
     *) only+=("$arg") ;;
   esac
@@ -103,13 +221,18 @@ if ((!list)); then
   export CARGO_TERM_PROGRESS_WIDTH=${COLUMNS:-$(tput cols 2>/dev/null || echo 100)}
   exec > >(tee "$LOG") 2>&1
   echo "craft-update started $(date '+%a %b %-d %H:%M')"
+  rm -rf "$RUN"; mkdir -p "$RUN"; date +%s >"$RUN/.started"
   total=0
   while read -r a _; do
     [[ -z $a || $a == \#* ]] && continue
-    wanted "$a" && ((total++))
+    wanted "$a" && { ((total++)); echo queued >"$RUN/$a"; }
   done <"$CONF"
   n=0
 fi
+
+# Record an app's state for --watch: queued, pulling, building <since>, built <time> <secs>,
+# uptodate, failed <time> <what>.
+mark() { [[ -d $RUN ]] && echo "$*" >"$RUN/$app"; }
 
 while read -r app flags; do
   [[ -z $app || $app == \#* ]] && continue
@@ -132,32 +255,39 @@ while read -r app flags; do
 
   ((n++)); start=$SECONDS
   echo "==> [$n/$total] $app"
+  mark pulling
   if [[ ! -d $dir/.git ]]; then
-    git clone -q "$ORG_URL/$app" "$dir" || { failed+=("$app (clone)"); continue; }
+    git clone -q "$ORG_URL/$app" "$dir" || { failed+=("$app (clone)"); mark failed 0 clone; continue; }
   else
-    git -C "$dir" pull -q --ff-only || { failed+=("$app (git pull)"); continue; }
+    git -C "$dir" pull -q --ff-only || { failed+=("$app (git pull)"); mark failed 0 git-pull; continue; }
   fi
 
   head=$(git -C "$dir" rev-parse HEAD)
   if ((!force)) && [[ -x $dir/target/release/$app && $(cat "$STATE/$app.built" 2>/dev/null) == "$head" ]]; then
     echo "    up to date (${head:0:9})"
+    mark uptodate
     install_files "$app" "$x11"
     unchanged+=("$app")
     continue
   fi
 
+  mark building "$(date +%s)"
   # shellcheck disable=SC2086  # $flags is intentionally word-split
   if (cd "$dir" && nice -n 10 cargo build --release --locked -p "$app" $flags); then
     install_files "$app" "$x11"
     echo "$head" >"$STATE/$app.built"
     echo "    built ${head:0:9} in $(((SECONDS - start) / 60))m $(((SECONDS - start) % 60))s"
+    mark built 0 $((SECONDS - start))
     updated+=("$app")
   else
     failed+=("$app (build)")
+    echo "    FAILED (build)"
+    mark failed 0 build
   fi
 done <"$CONF"
 
 ((list)) && exit 0
+date +%s >"$RUN/.finished"
 
 update-desktop-database -q "$DATA/applications" 2>/dev/null
 update-mime-database "$DATA/mime" 2>/dev/null
