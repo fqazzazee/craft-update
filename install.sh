@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 # Install craft-update for the current user.
 #
-#   ./install.sh              link craft-update into ~/.local/bin and enable the daily timer
-#   ./install.sh --no-timer   link craft-update only
+#   ./install.sh              link craft-update into ~/.local/bin (you run updates yourself)
+#   ./install.sh --timer      also run craft-update daily in the background (systemd user timer)
 #   ./install.sh --uninstall  remove the link and the timer (apps and their repos stay)
 set -euo pipefail
 
@@ -20,15 +20,15 @@ case ${1:-} in
     echo "Removed craft-update. Your apps, their repos and ~/.config/craft-update are untouched."
     exit 0
     ;;
-  --no-timer|"") ;;
-  *) echo "usage: $0 [--no-timer | --uninstall]" >&2; exit 2 ;;
+  --timer|"") ;;
+  *) echo "usage: $0 [--timer | --uninstall]" >&2; exit 2 ;;
 esac
 
 mkdir -p "$(dirname "$BIN")"
 ln -sfn "$HERE/craft-update" "$BIN"
 echo "Linked $BIN -> $HERE/craft-update"
 
-if [[ ${1:-} != --no-timer ]]; then
+if [[ ${1:-} == --timer ]]; then
   mkdir -p "$UNITS"
   install -m644 "$HERE/systemd/craft-update.service" "$HERE/systemd/craft-update.timer" "$UNITS/"
   systemctl --user daemon-reload

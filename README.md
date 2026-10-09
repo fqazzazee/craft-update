@@ -1,7 +1,7 @@
 # craft-update
 
 Build, install and update the [ArtCraft](https://getartcraft.com/) Crafting Apps on Linux from
-source, with launcher icons and an optional daily update timer.
+source, with launcher icons. You run updates when you want and can watch them live.
 
 The Crafting Apps are open-source, native desktop apps written in Rust. New changes land almost
 every day. `craft-update` pulls each app's repo, rebuilds only the apps that changed, and installs
@@ -65,9 +65,10 @@ git clone https://github.com/fqazzazee/craft-update ~/git/craft-update
 craft-update
 ```
 
-`install.sh` links `craft-update` into `~/.local/bin` and turns on the daily timer. Use
-`./install.sh --no-timer` to skip the timer, or `./install.sh --uninstall` to remove both. Your apps
-and their repos are never deleted.
+`install.sh` links `craft-update` into `~/.local/bin`. Nothing runs in the background unless you
+ask for it with `./install.sh --timer` (see [Optional daily updates](#optional-daily-updates)).
+`./install.sh --uninstall` removes the link and the timer. Your apps and their repos are never
+deleted.
 
 The first `craft-update` run clones and builds every app in the list, which can take a while.
 
@@ -78,7 +79,20 @@ craft-update                    # update every app; rebuild only the ones that c
 craft-update photocraft         # update just these apps
 craft-update --force            # rebuild even if nothing changed
 craft-update --list             # show each app's built commit and how many new commits are waiting
+craft-update --watch            # follow a running update live, or show what the last run did
 ```
+
+### Watching an update
+
+A run prints its progress as it goes: which app it's on (`==> [3/7] photocraft`), cargo's
+progress bar, and how long each build took. Everything is also written to
+`~/.local/state/craft-update/last-run.log`.
+
+From another terminal, `craft-update --watch` follows the running update live and exits when it
+finishes. Ctrl-C stops watching, not the update. With no update running, it shows a summary of the
+last run.
+
+Only one update runs at a time. Starting a second one tells you to use `--watch` instead.
 
 ## Choosing apps
 
@@ -96,16 +110,18 @@ gridcraft @x11
 - `--features heif` matches PhotoCraft's official builds, which can open HEIC/HEIF photos.
 - `@x11` is explained below.
 
-## Daily updates
+## Optional daily updates
 
-The timer (`systemd/craft-update.timer`) runs `craft-update` once a day around 12:30 local time.
+Off by default. `./install.sh --timer` installs a systemd user timer
+(`systemd/craft-update.timer`) that runs `craft-update` in the background once a day around 12:30
+local time. `craft-update --watch` follows those runs too.
 If your computer is off then, it runs the next time you log in. When something was updated or failed,
 you get a desktop notification.
 
 ```sh
 systemctl --user list-timers craft-update.timer     # when it runs next
 journalctl --user -u craft-update.service           # what the last runs did
-systemctl --user disable --now craft-update.timer   # turn it off
+./install.sh --uninstall && ./install.sh             # turn it off again
 ```
 
 To change the time, edit `OnCalendar=` in `~/.config/systemd/user/craft-update.timer`, then run

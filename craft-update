@@ -7,6 +7,7 @@
 #   craft-update photocraft   only these apps
 #   craft-update --force      rebuild even when nothing changed
 #   craft-update --list       show apps, installed commit and upstream status
+#   craft-update --watch      follow a running update live (from any terminal), or show the last run
 #
 # Apps live in ~/git/<app>. The app list is ~/.config/craft-update/apps (one name per line,
 # optional cargo flags after the name). Add a line and run craft-update to install a new app;
@@ -42,12 +43,28 @@ gridcraft
 EOF
 fi
 
+LOG=$STATE/last-run.log
+PIDFILE=$STATE/run.pid
+
+watch() {
+  if [[ ! -f $LOG ]]; then echo "craft-update hasn't run yet."; exit 0; fi
+  local pid; pid=$(cat "$PIDFILE" 2>/dev/null)
+  if [[ -n $pid ]] && kill -0 "$pid" 2>/dev/null; then
+    echo "Following the running update (pid $pid). Ctrl-C stops watching, not the update."
+    tail -n 30 -f --pid="$pid" "$LOG"
+  else
+    echo "No update running. Last run, $(date -r "$LOG" '+%a %b %-d %H:%M'):"
+    grep -a -E '^(==>|    |updated:|FAILED:)' "$LOG"
+  fi
+}
+
 force=0 list=0 only=()
 for arg in "$@"; do
   case $arg in
     -f|--force) force=1 ;;
     -l|--list) list=1 ;;
-    -h|--help) sed -n '3,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -w|--watch) watch; exit 0 ;;
+    -h|--help) sed -n '3,16p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*) echo "unknown option: $arg" >&2; exit 2 ;;
     *) only+=("$arg") ;;
   esac
@@ -73,6 +90,27 @@ install_files() {
 
 updated=() failed=() unchanged=()
 
+if ((!list)); then
+  # One run at a time; others can follow it with --watch.
+  exec 9>"$STATE/lock"
+  if ! flock -n 9; then
+    echo "craft-update is already running. Follow it with: craft-update --watch" >&2
+    exit 1
+  fi
+  echo $$ >"$PIDFILE"
+  # Mirror everything into the log for --watch, keeping cargo's colors and progress bar.
+  export CARGO_TERM_COLOR=always CARGO_TERM_PROGRESS_WHEN=always
+  export CARGO_TERM_PROGRESS_WIDTH=${COLUMNS:-$(tput cols 2>/dev/null || echo 100)}
+  exec > >(tee "$LOG") 2>&1
+  echo "craft-update started $(date '+%a %b %-d %H:%M')"
+  total=0
+  while read -r a _; do
+    [[ -z $a || $a == \#* ]] && continue
+    wanted "$a" && ((total++))
+  done <"$CONF"
+  n=0
+fi
+
 while read -r app flags; do
   [[ -z $app || $app == \#* ]] && continue
   wanted "$app" || continue
@@ -92,7 +130,8 @@ while read -r app flags; do
     continue
   fi
 
-  echo "==> $app"
+  ((n++)); start=$SECONDS
+  echo "==> [$n/$total] $app"
   if [[ ! -d $dir/.git ]]; then
     git clone -q "$ORG_URL/$app" "$dir" || { failed+=("$app (clone)"); continue; }
   else
@@ -111,7 +150,7 @@ while read -r app flags; do
   if (cd "$dir" && nice -n 10 cargo build --release --locked -p "$app" $flags); then
     install_files "$app" "$x11"
     echo "$head" >"$STATE/$app.built"
-    echo "    built ${head:0:9}"
+    echo "    built ${head:0:9} in $(((SECONDS - start) / 60))m $(((SECONDS - start) % 60))s"
     updated+=("$app")
   else
     failed+=("$app (build)")
@@ -134,4 +173,8 @@ if [[ -n ${CRAFT_UPDATE_NOTIFY:-} ]] && command -v notify-send >/dev/null &&
   notify-send -a "Craft apps" -i software-update-available "Craft apps update" "$summary"
 fi
 
-((${#failed[@]} == 0))
+rc=$((${#failed[@]} > 0))
+# Let tee finish writing before the shell prompt comes back.
+exec >&- 2>&-
+wait "$!" 2>/dev/null
+exit "$rc"
