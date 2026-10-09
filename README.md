@@ -3,6 +3,8 @@
 Build, install and update the [ArtCraft](https://getartcraft.com/) Crafting Apps on Linux from
 source, with launcher icons. You run updates when you want and can watch them live.
 
+![craft-update --watch: a table of the apps with when each was last updated and whether a new version is waiting, and a live progress bar while PdfCraft and PhotoCraft build](docs/watch-preview.svg)
+
 The Crafting Apps are open-source, native desktop apps written in Rust. New changes land almost
 every day. `craft-update` pulls each app's repo, rebuilds only the apps that changed, and installs
 them for your user with their menu entries, icons and file types.
@@ -84,21 +86,8 @@ craft-update --watch            # dashboard: last update and new versions per ap
 
 ### Watching an update
 
-`craft-update --watch` shows a dashboard of your apps:
-
-```
-Craft apps  Fri Oct 9 13:11:00
-Update running since Oct 9 13:10 (just now). Ctrl-C stops watching, not the update.
-
-APP          INSTALLED  LAST UPDATED             NEW VERSION                  THIS RUN
-pdfcraft     f626db25c  Oct 9 13:00 (10m ago)    4 new commits                building 0m 51s
-photocraft   8e8e9f2c6  Oct 9 07:41 (5h ago)     update available             queued
-deckcraft    4b09f35c1  Oct 9 11:14 (1h ago)     up to date
-...
-
-pdfcraft [#############################################.] 662/664 99%
-compiling: pdfcraft-ui-egui
-```
+`craft-update --watch` shows a dashboard of your apps (the preview at the top of this page is a
+real recording):
 
 - **LAST UPDATED** is when each app was last built and installed.
 - **NEW VERSION** checks GitHub for newer commits each time you open the dashboard. It shows the
