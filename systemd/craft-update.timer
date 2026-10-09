@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily rebuild of the ArtCraft Craft apps
+
+[Timer]
+OnCalendar=*-*-* 12:30
+RandomizedDelaySec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

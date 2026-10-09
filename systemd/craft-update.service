@@ -1,0 +1,12 @@
+[Unit]
+Description=Pull and rebuild the ArtCraft Craft apps
+After=network-online.target
+
+[Service]
+Type=oneshot
+Environment=CRAFT_UPDATE_NOTIFY=1
+Environment=PATH=%h/.cargo/bin:%h/.local/bin:/usr/local/bin:/usr/bin
+ExecStart=%h/.local/bin/craft-update
+Nice=15
+IOSchedulingClass=idle
+CPUWeight=20
