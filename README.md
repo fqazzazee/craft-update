@@ -187,6 +187,10 @@ PdfCraft only needs the `dejavu-sans-fonts` package. Reported in
 | `CRAFT_SRC_DIR` | `~/git` | Where the app repos live |
 | `CRAFT_UPDATE_NOTIFY` | unset (set by the timer) | Send a desktop notification after a run |
 
+## Support
+
+If it saved you some time building the Crafting Apps, you can [buy me a coffee ☕](https://buymeacoffee.com/fqazzazee).
+
 ## License
 
 Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT)
